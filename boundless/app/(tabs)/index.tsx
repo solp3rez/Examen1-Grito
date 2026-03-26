@@ -1,38 +1,147 @@
 import React, { useRef, useState } from "react";
 import {
-  Animated,
-  StyleSheet,
-  Text,
   View,
-  Dimensions,
+  Text,
   Pressable,
+  StyleSheet,
+  Animated,
+  Vibration,
+  Dimensions,
 } from "react-native";
 import { Audio } from "expo-av";
 
-const { height } = Dimensions.get("window");
+const { width } = Dimensions.get("window");
 
-// 🔥 FRASES MÁS NARRATIVAS (PROGRESO EMOCIONAL)
+// 💬 FRASES = lo que dice el interior
 const FRASES = [
-  "no puedo",
+  "ayudame...",
   "escuchame",
-  "dejame salir",
-  "no aguanto más",
-  "GRITÁ",
-  "ROMPELO",
+  "sacame de aca",
+  "no puedo salir",
+  "me estoy ahogando",
+  "GRITA",
 ];
 
-export default function ScrollEfecto() {
-  const scrollY = useRef(new Animated.Value(0)).current;
-  const scrollRef = useRef<any>(null);
-  const recordingRef = useRef<Audio.Recording | null>(null);
+export default function App() {
 
+  // 🎤 guarda el micro
+  const recordingRef = useRef(null);
+
+  // ⏱️ loop del volumen
+  const intervalRef = useRef(null);
+
+  // 🚫 evita bugs si tocas muchas veces
+  const isStartingRef = useRef(false);
+
+  // 🎮 estados
   const [grabando, setGrabando] = useState(false);
-  const [mostrarRespirar, setMostrarRespirar] = useState(false);
-  const [final, setFinal] = useState(false);
+  const [liberado, setLiberado] = useState(false);
+  const [fraseIndex, setFraseIndex] = useState(0);
 
-  const scrollPos = useRef(0);
+  // 🎨 animaciones
+  const fadeAnim = useRef(new Animated.Value(1)).current;
+  const scaleAnim = useRef(new Animated.Value(1)).current;
+  const rotateAnim = useRef(new Animated.Value(0)).current;
+  const translateY = useRef(new Animated.Value(0)).current;
+  const shakeX = useRef(new Animated.Value(0)).current;
 
+  // 🛑 corta el micro sin romper nada
+  const detener = async () => {
+    try {
+      if (recordingRef.current) {
+        const status = await recordingRef.current.getStatusAsync();
+
+        // 👇 solo corta si está grabando
+        if (status.isRecording) {
+          await recordingRef.current.stopAndUnloadAsync();
+        }
+      }
+    } catch {}
+    recordingRef.current = null;
+  };
+
+  // 💥 animación del texto
+  const animarTexto = () => {
+    scaleAnim.setValue(0.9);
+    rotateAnim.setValue(0);
+    translateY.setValue(30);
+
+    Animated.parallel([
+      Animated.timing(scaleAnim, {
+        toValue: 1.15,
+        duration: 200,
+        useNativeDriver: true,
+      }),
+      Animated.timing(translateY, {
+        toValue: 0,
+        duration: 200,
+        useNativeDriver: true,
+      }),
+      Animated.timing(rotateAnim, {
+        toValue: 1,
+        duration: 200,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  };
+
+  // 🚀 avanzar frases
+  const avanzar = () => {
+
+    // 📳 vibra cuando "rompés"
+    Vibration.vibrate(100);
+
+    // 😵 sacudida
+    Animated.sequence([
+      Animated.timing(shakeX, { toValue: 20, duration: 40, useNativeDriver: true }),
+      Animated.timing(shakeX, { toValue: -20, duration: 40, useNativeDriver: true }),
+      Animated.timing(shakeX, { toValue: 0, duration: 40, useNativeDriver: true }),
+    ]).start();
+
+    Animated.timing(fadeAnim, {
+      toValue: 0,
+      duration: 120,
+      useNativeDriver: true,
+    }).start(() => {
+
+      setFraseIndex((prev) => {
+        const next = prev + 1;
+
+        // 💥 FINAL
+        if (next >= FRASES.length) {
+          clearInterval(intervalRef.current);
+          detener();
+
+          Vibration.vibrate([200, 100, 200]);
+
+          setGrabando(false);
+          setLiberado(true);
+        }
+
+        return next;
+      });
+
+      fadeAnim.setValue(0);
+      animarTexto();
+
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 200,
+        useNativeDriver: true,
+      }).start();
+    });
+  };
+
+  // 🎤 EMPEZAR
   const empezar = async () => {
+
+    // 🚫 evita bugs
+    if (grabando || isStartingRef.current) return;
+
+    isStartingRef.current = true;
+
+    await detener();
+
     const permiso = await Audio.requestPermissionsAsync();
     if (!permiso.granted) return;
 
@@ -41,209 +150,225 @@ export default function ScrollEfecto() {
       playsInSilentModeIOS: true,
     });
 
-    const recording = new Audio.Recording();
-    await recording.prepareToRecordAsync(
-      Audio.RecordingOptionsPresets.HIGH_QUALITY
-    );
+    const rec = new Audio.Recording();
 
-    await recording.startAsync();
-    recordingRef.current = recording;
+    await rec.prepareToRecordAsync({
+      ...Audio.RecordingOptionsPresets.HIGH_QUALITY,
+      isMeteringEnabled: true,
+    });
+
+    await rec.startAsync();
+    recordingRef.current = rec;
 
     setGrabando(true);
-    setMostrarRespirar(false);
-    setFinal(false);
+    setLiberado(false);
+    setFraseIndex(0);
 
-    let silencioFrames = 0;
+    let ultimoVolumen = -160;
 
-    const interval = setInterval(async () => {
-      const status = await recording.getStatusAsync();
+    // 🔊 dificultad equilibrada
+    let umbralActual = -25;
+
+    let tiempoUltimaFrase = 0;
+
+    // 😵 temblor constante
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(shakeX, { toValue: 3, duration: 80, useNativeDriver: true }),
+        Animated.timing(shakeX, { toValue: -3, duration: 80, useNativeDriver: true }),
+      ])
+    ).start();
+
+    intervalRef.current = setInterval(async () => {
+
+      if (!recordingRef.current) return;
+
+      const status = await recordingRef.current.getStatusAsync();
       if (!status.isRecording) return;
 
-      const volumen = status.metering ?? -160;
+      const vol = status.metering ?? -160;
+      const cambio = vol - ultimoVolumen;
 
-      // 🔥 MÁS DRAMÁTICO (acumulación real)
-      if (volumen > -25) {
-        scrollPos.current += 25; // grito empuja fuerte
-        silencioFrames = 0;
+      // 🔊 grito progresivo (pero posible)
+      if (vol > umbralActual && cambio > 6) {
+
+        // 👇 sube dificultad pero no exagerado
+        if (fraseIndex < FRASES.length - 2) {
+          umbralActual += 4;
+        } else {
+          umbralActual = Math.min(umbralActual, -10);
+        }
+
+        avanzar();
+        tiempoUltimaFrase = 0;
+
       } else {
-        scrollPos.current -= 5; // baja lento → tensión
-        silencioFrames++;
+
+        // 😈 último pasa sí o sí
+        if (fraseIndex === FRASES.length - 1) {
+          tiempoUltimaFrase += 80;
+
+          if (tiempoUltimaFrase > 1500) {
+            avanzar();
+          }
+        }
       }
 
-      // límites
-      if (scrollPos.current < 0) scrollPos.current = 0;
+      ultimoVolumen = vol;
 
-      const maxScroll = height * (FRASES.length - 1);
+    }, 80);
 
-      if (scrollPos.current >= maxScroll) {
-        scrollPos.current = maxScroll;
+    isStartingRef.current = false;
+  };
 
-        // 💥 FINAL (ROMPE TODO)
-        clearInterval(interval);
-        await recording.stopAndUnloadAsync();
+  const reiniciar = async () => {
+    clearInterval(intervalRef.current);
+    await detener();
 
-        setGrabando(false);
-        setFinal(true);
-      }
+    setFraseIndex(0);
+    setGrabando(false);
+    setLiberado(false);
 
-      scrollRef.current?.scrollTo({
-        y: scrollPos.current,
-        animated: false,
-      });
-
-      // 😌 respirar
-      if (silencioFrames > 20) {
-        setMostrarRespirar(true);
-      } else {
-        setMostrarRespirar(false);
-      }
-    }, 60);
+    shakeX.setValue(0);
   };
 
   return (
-    <View style={styles.container}>
-      {/* 🟢 INICIO */}
-      {!grabando && !final && (
-        <View style={styles.center}>
-          <Text style={styles.grita}>GRITÁ</Text>
+    <Animated.View style={[styles.container, { transform: [{ translateX: shakeX }] }]}>
 
-          <Pressable style={styles.boton} onPress={empezar}>
-            <Text style={styles.botonTexto}>EMPEZAR 🎤</Text>
+      {!grabando && !liberado && (
+        <View style={styles.center}>
+          <Text style={styles.title}>ENCERRADO</Text>
+
+          <Pressable style={styles.button} onPress={empezar}>
+            <Text style={styles.buttonText}>GRITAR</Text>
           </Pressable>
         </View>
       )}
 
-      {/* 🔴 DURANTE */}
       {grabando && (
-        <>
-          <Animated.ScrollView
-            ref={scrollRef}
-            scrollEnabled={false}
-            contentContainerStyle={{
-              height: height * FRASES.length,
-            }}
-            showsVerticalScrollIndicator={false}
-            scrollEventThrottle={16}
-            onScroll={Animated.event(
-              [{ nativeEvent: { contentOffset: { y: scrollY } } }],
-              { useNativeDriver: true }
-            )}
-          >
-            {FRASES.map((texto, i) => {
-              const inputRange = [
-                (i - 1) * height,
-                i * height,
-                (i + 1) * height,
-              ];
-
-              const translateY = scrollY.interpolate({
-                inputRange,
-                outputRange: [100, 0, -100],
-                extrapolate: "clamp",
-              });
-
-              const opacity = scrollY.interpolate({
-                inputRange,
-                outputRange: [0, 1, 0],
-                extrapolate: "clamp",
-              });
-
-              const scale = scrollY.interpolate({
-                inputRange,
-                outputRange: [0.8, 1.3, 0.8], // más intenso
-                extrapolate: "clamp",
-              });
-
-              return (
-                <View key={i} style={styles.page}>
-                  <Animated.Text
-                    style={[
-                      styles.text,
-                      i === FRASES.length - 1 && styles.finalTexto,
-                      {
-                        opacity,
-                        transform: [{ translateY }, { scale }],
-                      },
-                    ]}
-                  >
-                    {texto}
-                  </Animated.Text>
-                </View>
-              );
-            })}
-          </Animated.ScrollView>
-
-          {/* 😌 MENSAJE */}
-          {mostrarRespirar && (
-            <Text style={styles.respirar}>
-              Tranquilo, podés respirar
-            </Text>
-          )}
-        </>
-      )}
-
-      {/* 💥 FINAL */}
-      {final && (
         <View style={styles.center}>
-          <Text style={styles.finalPantalla}>LO DIJISTE</Text>
+
+          {/* 🗣️ voz interior */}
+          <Text style={styles.emoji}>🗣️</Text>
+
+          {/* 🧱 barrera */}
+          <View style={styles.box}>
+            <Animated.Text
+              style={[
+                styles.text,
+                {
+                  opacity: fadeAnim,
+                  transform: [
+                    { translateY },
+                    { scale: scaleAnim },
+                    {
+                      rotate: rotateAnim.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: ["-10deg", "10deg"],
+                      }),
+                    },
+                  ],
+                },
+              ]}
+            >
+              {FRASES[fraseIndex]}
+            </Animated.Text>
+          </View>
+
+          {/* 📢 mensaje */}
+          <Text style={styles.pj}>
+            grita para sacarme de aca
+          </Text>
+
+          <Pressable style={styles.reset} onPress={reiniciar}>
+            <Text style={styles.resetText}>REINICIAR</Text>
+          </Pressable>
         </View>
       )}
-    </View>
+
+      {liberado && (
+        <View style={styles.center}>
+          <Text style={styles.final}>PUEDO SALIR</Text>
+
+          <Pressable style={styles.button} onPress={reiniciar}>
+            <Text style={styles.buttonText}>VOLVER</Text>
+          </Pressable>
+        </View>
+      )}
+    </Animated.View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#000",
-  },
+  container: { flex: 1, backgroundColor: "#000" },
+
   center: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
   },
-  page: {
-    height,
+
+  title: {
+    fontSize: 45,
+    color: "#fff",
+    fontWeight: "bold",
+  },
+
+  emoji: {
+    fontSize: 50,
+    marginBottom: 10,
+  },
+
+  box: {
+    width: width * 0.8,
+    height: 150,
     justifyContent: "center",
     alignItems: "center",
+    borderColor: "#555",
+    borderWidth: 2,
+    marginBottom: 20,
+    padding: 10,
   },
+
   text: {
+    fontSize: 26,
     color: "#fff",
-    fontSize: 30,
     textAlign: "center",
-    paddingHorizontal: 20,
-  },
-  grita: {
-    fontSize: 50,
-    fontWeight: "bold",
-    color: "#fff",
-  },
-  finalTexto: {
-    color: "#ff3333",
-    fontSize: 40,
     fontWeight: "bold",
   },
-  boton: {
+
+  pj: {
+    color: "#ff4d4d",
+    fontSize: 16,
+  },
+
+  button: {
     marginTop: 20,
-    backgroundColor: "#ff4d4d",
+    backgroundColor: "#ff1a1a",
     padding: 15,
     borderRadius: 10,
   },
-  botonTexto: {
+
+  buttonText: {
     color: "#fff",
     fontWeight: "bold",
   },
-  respirar: {
+
+  reset: {
     position: "absolute",
-    bottom: 80,
-    alignSelf: "center",
-    color: "#00ff88",
-    fontSize: 22,
-    fontWeight: "bold",
+    bottom: 40,
+    backgroundColor: "#222",
+    padding: 10,
+    borderRadius: 8,
   },
-  finalPantalla: {
-    fontSize: 45,
-    color: "#00ff88",
+
+  resetText: {
+    color: "#fff",
+  },
+
+  final: {
+    fontSize: 40,
+    color: "#fff",
     fontWeight: "bold",
   },
 });
